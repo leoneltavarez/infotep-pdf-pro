@@ -8,54 +8,80 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# 1. CONFIGURACIÓN DE SEGURIDAD
-creds_info = json.loads(st.secrets["google_creds"]["json_data"])
-creds = service_account.Credentials.from_service_account_info(creds_info)
-drive_service = build('drive', 'v3', credentials=creds)
+# --- 1. CONFIGURACIÓN DE INTERFAZ ---
+st.set_page_config(page_title="Generador INFOTEP", layout="wide")
+st.title("🚀 Sistema de Automatización - INFOTEP 2026")
 
+# --- 2. CONEXIÓN CON GOOGLE DRIVE ---
+try:
+    creds_info = json.loads(st.secrets["google_creds"]["json_data"])
+    creds = service_account.Credentials.from_service_account_info(creds_info)
+    drive_service = build('drive', 'v3', credentials=creds)
+except Exception as e:
+    st.error(f"❌ Error en Secrets (JSON): {e}")
+
+# IDs fijos
 PARENT_FOLDER_ID = "1X-dNqrDVubLCqZyLh2rzHWFhZb47R0-m"
 PLANTILLA = "PLANTILLA_FINAL.pdf"
 
-# Función para organizar por empresas
-def get_or_create_folder(folder_name):
-    query = f"name = '{folder_name}' and '{PARENT_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    results = drive_service.files().list(q=query).execute().get('files', [])
-    if results:
-        return results[0]['id']
-    folder_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [PARENT_FOLDER_ID]}
-    file = drive_service.files().create(body=folder_metadata, fields='id').execute()
-    return file.get('id')
+# --- 3. MOTOR DE DATOS (LECTURA DEL EXCEL) ---
+@st.cache_data
+def cargar_datos():
+    # Tu ID de hoja de Google Sheets
+    sheet_id = "1SiA8b7PAWOlTUfrHu_ew3Qt-D1JTVSZKQ8bUbSS4GQU"
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    data = pd.read_csv(url)
+    data.columns = data.columns.str.strip() # Limpia espacios en nombres de columnas
+    return data
 
-st.title("Generador Pro - INFOTEP 2026")
+try:
+    df = cargar_datos()
+    lista_empresas = sorted(df['EMPRESA'].dropna().unique())
+    empresa_sel = st.selectbox("🎯 Seleccione la Empresa:", lista_empresas)
+except Exception as e:
+    st.error(f"❌ Error al cargar empresas: {e}")
+    df = None
 
-# 2. SELECCIÓN DE EMPRESA (Asegúrate de que tus datos carguen aquí)
-# empresa_seleccionada = st.selectbox("Seleccione la Empresa", lista_empresas)
+# --- 4. FUNCIONES DE CARPETAS ---
+def obtener_o_crear_carpeta(nombre_carpeta):
+    query = f"name = '{nombre_carpeta}' and '{PARENT_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    respuesta = drive_service.files().list(q=query).execute().get('files', [])
+    if respuesta:
+        return respuesta[0]['id']
+    meta = {'name': nombre_carpeta, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [PARENT_FOLDER_ID]}
+    return drive_service.files().create(body=meta, fields='id').execute().get('id')
 
-if st.button("Generar y Enviar a Drive"):
-    if not os.path.exists(PLANTILLA):
-        st.error("❌ Error Crítico: No se encuentra PLANTILLA_FINAL.pdf en el repositorio de GitHub.")
-    else:
-        try:
-            # Definir nombres y rutas
-            empresa = "COBB CARIBE S A" # Aquí usarás la variable del selectbox
-            nombre_archivo = f"Cronograma_{empresa.replace(' ', '_')}.pdf"
-            ruta_temporal = os.path.join("/tmp", nombre_archivo) # FORZAMOS ESCRITURA EN TMP
-
-            # PASO A: Llenado del PDF
-            # Ajusta los nombres de los campos ('Empresa', etc.) a los que usas en tu laptop
-            datos_llenado = {'Empresa': empresa, 'Dirección Regional': 'Cibao Norte'} 
-            
-            fillpdfs.write_fillable_pdf(PLANTILLA, ruta_temporal, datos_llenado)
-
-            # PASO B: Crear/Obtener carpeta en Drive
-            id_carpeta_destino = get_or_create_folder(empresa)
-
-            # PASO C: Subida a Drive
-            file_metadata = {'name': nombre_archivo, 'parents': [id_carpeta_destino]}
-            media = MediaFileUpload(ruta_temporal, mimetype='application/pdf')
-            drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-
-            st.success(f"✅ ¡ÉXITO! El cronograma de {empresa} se guardó en su carpeta correspondiente en Drive.")
-            
-        except Exception as e:
-            st.error(f"Fallo en el sistema: {str(e)}")
+# --- 5. EJECUCIÓN ---
+if st.button("🛠️ Generar y Subir a Drive"):
+    if df is not None:
+        if not os.path.exists(PLANTILLA):
+            st.error(f"❌ No se encuentra el archivo {PLANTILLA} en el repositorio.")
+        else:
+            try:
+                with st.spinner(f"Generando cronograma para {empresa_sel}..."):
+                    # Filtro de datos
+                    datos_filtro = df[df['EMPRESA'] == empresa_sel]
+                    
+                    # Preparar archivo temporal (INDISPENSABLE EN LA NUBE)
+                    nombre_pdf = f"Cronograma_{empresa_sel.replace(' ', '_')}.pdf"
+                    ruta_temp = os.path.join("/tmp", nombre_pdf)
+                    
+                    # Mapeo de campos (Asegúrate que coincidan con tu PDF)
+                    campos_pdf = {
+                        'Empresa': empresa_sel,
+                        'Dirección Regional': 'Cibao Norte',
+                        'Acciones de Capacitación': "\n".join(datos_filtro['ACCION FORMATIVA'].astype(str).tolist())
+                    }
+                    
+                    # Llenado físico del PDF
+                    fillpdfs.write_fillable_pdf(PLANTILLA, ruta_temp, campos_pdf)
+                    
+                    # Gestión en Google Drive
+                    id_subcarpeta = obtener_o_crear_carpeta(empresa_sel)
+                    meta_drive = {'name': nombre_pdf, 'parents': [id_subcarpeta]}
+                    media = MediaFileUpload(ruta_temp, mimetype='application/pdf')
+                    drive_service.files().create(body=meta_drive, media_body=media).execute()
+                    
+                    st.success(f"✅ ¡Proceso completado! Revisa la carpeta '{empresa_sel}' en tu Drive.")
+            except Exception as e:
+                st.error(f"❌ Error en el proceso: {e}")
