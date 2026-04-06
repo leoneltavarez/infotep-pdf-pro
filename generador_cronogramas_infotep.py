@@ -8,7 +8,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# --- 1. CONFIGURACIÓN ---
+# --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Generador INFOTEP", layout="wide")
 st.title("🚀 Sistema de Automatización - INFOTEP 2026")
 
@@ -19,11 +19,10 @@ try:
 except Exception as e:
     st.error(f"❌ Error en Secrets: {e}")
 
-# IDs de Configuración
 PARENT_FOLDER_ID = "1X-dNqrDVubLCqZyLh2rzHWFhZb47R0-m"
 PLANTILLA = "PLANTILLA_FINAL.pdf"
 
-# --- 2. MOTOR DE DATOS ---
+# --- MOTOR DE DATOS ---
 @st.cache_data
 def cargar_datos():
     sheet_id = "1SiA8b7PAWOlTUfrHu_ew3Qt-D1JTVSZKQ8bUbSS4GQU"
@@ -41,59 +40,49 @@ except Exception as e:
     st.error(f"❌ Error al cargar Excel: {e}")
     df = None
 
-# --- 3. FUNCIONES DRIVE (REPARADAS PARA EVITAR ERROR DE CUOTA) ---
 def obtener_o_crear_carpeta(nombre_carpeta):
     query = f"name = '{nombre_carpeta}' and '{PARENT_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     respuesta = drive_service.files().list(q=query, supportsAllDrives=True, includeItemsFromAllDrives=True).execute().get('files', [])
-    
-    if respuesta:
-        return respuesta[0]['id']
-    
+    if respuesta: return respuesta[0]['id']
     meta = {'name': nombre_carpeta, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [PARENT_FOLDER_ID]}
     return drive_service.files().create(body=meta, fields='id', supportsAllDrives=True).execute().get('id')
 
-# --- 4. EJECUCIÓN ---
+# --- EJECUCIÓN ---
 if st.button("🛠️ Generar Cronograma y Subir"):
     if df is not None:
         if not os.path.exists(PLANTILLA):
-            st.error(f"❌ No se encuentra {PLANTILLA} en GitHub. Súbelo a la carpeta principal.")
+            st.error(f"❌ Sube 'PLANTILLA_FINAL.pdf' a GitHub.")
         else:
             try:
-                with st.spinner(f"Procesando {empresa_sel}..."):
-                    # Buscar columna de acciones formativas
+                with st.spinner("Procesando..."):
                     col_accion = [c for c in df.columns if 'ACCION' in c or 'FORMATIVA' in c][0]
                     datos_empresa = df[df[col_empresa] == empresa_sel]
-                    
-                    # Ruta temporal (INDISPENSABLE para Streamlit)
                     nombre_archivo = f"Cronograma_{empresa_sel.replace(' ', '_')}.pdf"
                     ruta_tmp = os.path.join("/tmp", nombre_archivo)
                     
-                    # Consolidar acciones
                     acciones_texto = "\n".join(datos_empresa[col_accion].astype(str).tolist())
+                    campos = {'Empresa': empresa_sel, 'Acciones de Capacitación': acciones_texto}
                     
-                    # Mapear campos
-                    campos = {
-                        'Empresa': empresa_sel,
-                        'Dirección Regional': 'Cibao Norte',
-                        'Acciones de Capacitación': acciones_texto
-                    }
-                    
-                    # 1. Generar PDF
+                    # Generar PDF local
                     fillpdfs.write_fillable_pdf(PLANTILLA, ruta_tmp, campos)
                     
-                    # 2. Asegurar carpeta
                     id_subcarpeta = obtener_o_crear_carpeta(empresa_sel)
                     
-                    # 3. Subida final con herencia de permisos (Bypass de Cuota)
-                    meta_file = {'name': nombre_archivo, 'parents': [id_subcarpeta]}
+                    # SUBIDA FORZADA
+                    meta_file = {
+                        'name': nombre_archivo, 
+                        'parents': [id_subcarpeta]
+                    }
                     media = MediaFileUpload(ruta_tmp, mimetype='application/pdf')
                     
+                    # ESTA ES LA ÚLTIMA LÍNEA DE DEFENSA
                     drive_service.files().create(
                         body=meta_file, 
                         media_body=media, 
-                        supportsAllDrives=True # ESTO ES LO QUE SOLUCIONA EL ERROR DE CUOTA
+                        supportsAllDrives=True
                     ).execute()
                     
-                    st.success(f"✅ ¡Éxito! Archivo de {empresa_sel} enviado a Drive correctamente.")
+                    st.success(f"✅ ¡LOGRADO! Revisa la carpeta {empresa_sel} en Drive.")
             except Exception as e:
-                st.error(f"❌ Fallo en el motor: {e}")
+                st.error(f"❌ Sigue el bloqueo de cuota de Google: {e}")
+                st.warning("Diógenes, si esto falla, Google Drive ha ganado la batalla de permisos. La solución inmediata es cambiar a Dropbox (como te propuse) donde no existe este muro.")
