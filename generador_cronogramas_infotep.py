@@ -8,8 +8,8 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Generador INFOTEP", layout="wide")
+# --- 1. CONFIGURACIÓN ---
+st.set_page_config(page_title="Generador INFOTEP 2026", layout="wide")
 st.title("🚀 Sistema de Automatización - INFOTEP 2026")
 
 try:
@@ -19,10 +19,11 @@ try:
 except Exception as e:
     st.error(f"❌ Error en Secrets: {e}")
 
+# ID de tu carpeta principal en Drive
 PARENT_FOLDER_ID = "1X-dNqrDVubLCqZyLh2rzHWFhZb47R0-m"
 PLANTILLA = "PLANTILLA_FINAL.pdf"
 
-# --- MOTOR DE DATOS ---
+# --- 2. MOTOR DE DATOS ---
 @st.cache_data
 def cargar_datos():
     sheet_id = "1SiA8b7PAWOlTUfrHu_ew3Qt-D1JTVSZKQ8bUbSS4GQU"
@@ -37,52 +38,59 @@ try:
     lista_empresas = sorted(df[col_empresa].dropna().unique())
     empresa_sel = st.selectbox("🎯 Seleccione la Empresa:", lista_empresas)
 except Exception as e:
-    st.error(f"❌ Error al cargar Excel: {e}")
+    st.error(f"❌ Error en base de datos: {e}")
     df = None
 
+# --- 3. FUNCIÓN DE DRIVE ---
 def obtener_o_crear_carpeta(nombre_carpeta):
     query = f"name = '{nombre_carpeta}' and '{PARENT_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     respuesta = drive_service.files().list(q=query, supportsAllDrives=True, includeItemsFromAllDrives=True).execute().get('files', [])
     if respuesta: return respuesta[0]['id']
+    
     meta = {'name': nombre_carpeta, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [PARENT_FOLDER_ID]}
     return drive_service.files().create(body=meta, fields='id', supportsAllDrives=True).execute().get('id')
 
-# --- EJECUCIÓN ---
-if st.button("🛠️ Generar Cronograma y Subir"):
+# --- 4. EJECUCIÓN ---
+if st.button("🛠️ Generar y Subir"):
     if df is not None:
         if not os.path.exists(PLANTILLA):
-            st.error(f"❌ Sube 'PLANTILLA_FINAL.pdf' a GitHub.")
+            st.error(f"❌ No se encuentra el archivo {PLANTILLA} en GitHub.")
         else:
             try:
                 with st.spinner("Procesando..."):
                     col_accion = [c for c in df.columns if 'ACCION' in c or 'FORMATIVA' in c][0]
                     datos_empresa = df[df[col_empresa] == empresa_sel]
+                    
                     nombre_archivo = f"Cronograma_{empresa_sel.replace(' ', '_')}.pdf"
                     ruta_tmp = os.path.join("/tmp", nombre_archivo)
                     
+                    # Consolidar acciones formativas
                     acciones_texto = "\n".join(datos_empresa[col_accion].astype(str).tolist())
-                    campos = {'Empresa': empresa_sel, 'Acciones de Capacitación': acciones_texto}
                     
-                    # Generar PDF local
+                    # Campos a llenar (Asegúrate de que coincidan con tu PDF)
+                    campos = {
+                        'Empresa': empresa_sel,
+                        'Acciones de Capacitación': acciones_texto,
+                        'Dirección Regional': 'Cibao Norte'
+                    }
+                    
+                    # 1. Crear el PDF físicamente en el servidor
                     fillpdfs.write_fillable_pdf(PLANTILLA, ruta_tmp, campos)
                     
+                    # 2. Obtener carpeta en Drive
                     id_subcarpeta = obtener_o_crear_carpeta(empresa_sel)
                     
-                    # SUBIDA FORZADA
-                    meta_file = {
-                        'name': nombre_archivo, 
-                        'parents': [id_subcarpeta]
-                    }
+                    # 3. Subida con soporte de cuota compartida
+                    meta_file = {'name': nombre_archivo, 'parents': [id_subcarpeta]}
                     media = MediaFileUpload(ruta_tmp, mimetype='application/pdf')
                     
-                    # ESTA ES LA ÚLTIMA LÍNEA DE DEFENSA
                     drive_service.files().create(
                         body=meta_file, 
                         media_body=media, 
-                        supportsAllDrives=True
+                        supportsAllDrives=True 
                     ).execute()
                     
-                    st.success(f"✅ ¡LOGRADO! Revisa la carpeta {empresa_sel} en Drive.")
+                    st.success(f"✅ ¡Éxito! El cronograma de {empresa_sel} ha sido enviado a Drive.")
+                    
             except Exception as e:
-                st.error(f"❌ Sigue el bloqueo de cuota de Google: {e}")
-                st.warning("Diógenes, si esto falla, Google Drive ha ganado la batalla de permisos. La solución inmediata es cambiar a Dropbox (como te propuse) donde no existe este muro.")
+                st.error(f"❌ El error persiste: {e}")
